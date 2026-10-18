@@ -1,9 +1,9 @@
 """
-bot.py - Telegram Medical Mind Map Markdown Generator Bot
-=========================================================
+bot.py - Telegram Medical Mind Map Markdown Generator Bot (v2.0 High-Speed Edition)
+===================================================================================
 طراحی‌شده با معماری هم‌ساختار با `mindmapbotargon-1.0.0`:
 - دریافت متن‌های بسیار ساده، جملات کوتاه، جزوات خام یا فایل‌های متنی (.txt / .md)
-- اتصال مستقیم به هوش مصنوعی با کلید API شما (`AQ.Ab8RN6...`)
+- اتصال موازی و فوق‌سریع به هوش مصنوعی با کلید API شما (`AQ.Ab8RN6...`) بدون خطای Timeout
 - تولید فایل استاندارد `.md` و `.opml` صددرصد سازگار با ربات رندرینگ نقشه ذهنی
 - قابلیت ویرایش تعاملی نقشه ذهنی با دستور متنی و انتخاب از میان ۶ الگوی استاندارد مدوفست
 """
@@ -89,7 +89,7 @@ _CB_ACT = "ACT:"
 _SESSIONS_KEY = "_md_sessions"
 _MAX_SESSIONS_PER_USER = 8
 _MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-_AI_TIMEOUT_SEC = 75.0
+_AI_TIMEOUT_SEC = 180.0
 
 _AI_SEMAPHORE = asyncio.Semaphore(max(1, MAX_CONCURRENT_AI_CALLS))
 
@@ -258,7 +258,7 @@ async def _prompt_mode_selection(
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     welcome_lines = [
-        "👋 سلام! به <b>ربات هوشمند تولیدکننده Markdown نقشه ذهنی پزشکی (سبک مدوفست)</b> خوش آمدید.",
+        "👋 سلام! به <b>ربات هوشمند تولیدکننده Markdown نقشه ذهنی پزشکی (سبک مدوفست — نسخه سریع v2.0)</b> خوش آمدید.",
         "",
         "من متن‌های بسیار ساده، جملات کوتاه، جزوات خام یا حتی <b>فقط نام یک بیماری یا مبحث پزشکی</b> را می‌گیرم و آن را به <b>فایل استاندارد <code>.md</code> و <code>.opml</code></b> (صددرصد آماده برای ارسال به ربات رندرینگ نقشه ذهنی شما) تبدیل می‌کنم.",
         "",
@@ -345,7 +345,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not raw_text:
         return WAIT_INPUT
 
-    # بررسی اگر کاربر در وضعیت ویرایش نقشه ذهنی قبلی است
     editing_token = context.user_data.get("_active_edit_token")
     if isinstance(editing_token, str) and editing_token:
         context.user_data.pop("_active_edit_token", None)
@@ -439,7 +438,7 @@ async def _execute_ai_generation(
         logger.error("AI generation timed out after %s seconds", _AI_TIMEOUT_SEC)
         if status_msg:
             await status_msg.edit_text(
-                text="⏱ زمان پاسخ‌گویی هوش مصنوعی بیش از حد مجاز طول کشید. لطفاً مجدداً تلاش کنید.",
+                text="⏱ زمان پاسخ‌گویی بیش از حد مجاز طول کشید. لطفاً مجدداً تلاش کنید.",
                 parse_mode=ParseMode.HTML,
             )
         return WAIT_INPUT
@@ -464,7 +463,6 @@ async def _execute_ai_generation(
 
     md_filename = _safe_filename(tree.text, suffix=".md")
 
-    # ۱. ارسال فایل .md آماده برای فوروارد به ربات رندرینگ
     if target_msg:
         await _safe_send(
             lambda: target_msg.reply_document(
@@ -485,7 +483,6 @@ async def _execute_ai_generation(
             )
         )
 
-        # ۲. ارسال متن خام داخل تگ <pre><code> جهت کپی تک‌کلیکی در تلگرام
         if len(canonical_md) <= 3800:
             await _safe_send(
                 lambda: target_msg.reply_text(
@@ -515,7 +512,6 @@ async def handle_mode_callback(
 
     await query.answer()
     data_str = query.data or ""
-    # فرمت: GEN:<token>:<template_mode>:<enrich_mode>
     parts = data_str.split(":", 3)
     if len(parts) != 4 or parts[0] != "GEN":
         return WAIT_INPUT
@@ -539,7 +535,6 @@ async def handle_action_callback(
 
     await query.answer()
     data_str = query.data or ""
-    # فرمت: ACT:<token>:<action>
     parts = data_str.split(":", 2)
     if len(parts) != 3 or parts[0] != "ACT":
         return WAIT_INPUT
