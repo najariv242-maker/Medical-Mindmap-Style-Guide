@@ -33,13 +33,13 @@ from parser import Node, parse_markdown, tree_to_canonical_markdown
 
 logger = logging.getLogger("mindmap_md_bot.ai_engine")
 
-DEFAULT_AI_API_KEY = "cc_ItgqjcOWGe7Gp267hWOSMAi5TBqEvJvhbANaJ8LCqg5dtqci"
-BUILTIN_VERTEX_FALLBACK_KEY = "AQ.Ab8RN6Ijxd6MDZtSc4gAuQlpeJR8VXhRAt2EF3CTkR5f66Qo4Q"
+DEFAULT_AI_API_KEY = "AQ.Ab8RN6KWuLT-fUlCygajyDzunN7T21lP-RBU7Y3t_uOOv5dgAQ"
+BUILTIN_VERTEX_FALLBACK_KEY = "AQ.Ab8RN6KWuLT-fUlCygajyDzunN7T21lP-RBU7Y3t_uOOv5dgAQ"
 _INVALID_PLACEHOLDER_KEYS = {
     "",
     "YOUR_AI_API_KEY_HERE",
 }
-# کلیدهایی که خطای 402 (عدم تایید پرداخت / اتمام شارژ) داده‌اند کش می‌شوند تا درخواست‌های بعدی معطل نشوند
+# کلیدهایی که خطای اتمام شارژ یا نامعتبر داده‌اند کش می‌شوند تا درخواست‌های بعدی معطل نشوند
 _BILLING_FAILED_KEYS: set[str] = set()
 
 
@@ -62,7 +62,7 @@ def get_active_api_key(explicit_key: Optional[str] = None) -> str:
     return BUILTIN_VERTEX_FALLBACK_KEY
 
 # کش کردن سریع‌ترین مسیر پاسخ‌دهنده پس از اولین درخواست موفق
-_WINNING_ROUTE_CACHE: Optional[Tuple[str, str, bool, bool]] = None
+_WINNING_ROUTE_CACHE: Optional[Tuple[str, str, bool]] = None
 
 TEMPLATE_MODES: Dict[str, Dict[str, str]] = {
     "auto": {
@@ -260,107 +260,179 @@ def find_topic_archetype(topic_name: str) -> Tuple[str, Optional[str]]:
 
 MEDICAL_MINDMAP_SYSTEM_PROMPT = """شما یک متخصص ارشد آموزش پزشکی و معمار نقشه‌های ذهنی بالینی (Medical Mind Map Architect) به سبک استاندارد «مدوفست (Medofast)» و منطبق بر رفرنس‌های معتبر پزشکی جهانی (نلسون رفرنس اطفال Nelson Pediatrics، هاریسون Harrison، و آپتودیت UpToDate) هستید.
 
-وظیفه شما دریافت هر نوع ورودی از کاربر (شامل نام یک بیماری یا مبحث، یک جمله کوتاه، متن خام، جزوه درسی، یا کیس بالینی) و تبدیل آن به **بهترین، دقیق‌ترین و استانداردترین فایل Markdown نقشه ذهنی** برای موتور رندرینگ گرافیکی (XMind / Argon Renderer) است.
+وظیفه شما دریافت هر نوع ورودی از کاربر (شامل نام یک بیماری یا مبحث، یک جمله کوتاه، متن خام، جزوه درسی، یا کیس بالینی) و تبدیل آن به **بهترین، دقیق‌ترین و استانداردترین فایل Markdown نقشه ذهنی متقارن دوطرفه** برای موتور رندرینگ گرافیکی (XMind / Argon Renderer) است.
 
 =====================================================================
-قوانین طلایی و قطعی سینتکس نقشه ذهنی (صددرصد سازگار با موتور آرگون و XMind):
+قوانین ۵‌گانه حیاتی برای تولید نقشه ذهنی متقارن، استاندارد و آزمونی:
 =====================================================================
 
-۱. **سینتکس خروجی (Strict Raw Markdown Only)**:
-   - خروجی شما باید **فقط و فقط کد خام مارک‌داون** باشد، بدون سلام، بدون احوالپرسی، بدون توضیحات اضافی و بدون هرگونه مقدمه یا مؤخره.
-   - **موضوع مرکزی (Central Topic - سطح 0)**:
-     - دقیقاً یک خط منفرد در خط اول فایل با `# ` (یک هشتگ و یک فاصله).
-     - نام موضوع مرکزی باید دقیق، علمی و در صورت داشتن اختصار رایج پزشکی انگلیسی، با اختصار در پرانتز باشد:
-       مثال: `# مجرای شریانی باز (PDA)`، `# انعقاد داخل عروقی منتشر (DIC)`، `# نقص دیواره بین بطنی (VSD)`، `# آتروفی عضلانی نخاعی (SMA)`، `# کاوازاکی (Kawasaki)`، `# کتواسیدوز دیابتی (DKA)`، `# انسفالوپاتی هیپوکسیک ایسکمیک (HIE)`
-     - برای مباحث اپروچ، الگوریتم یا اتیولوژی:
-       مثال: `# اپروچ به هایپرآمونمی شیرخواران`، `# اتیولوژی هیپربیلیروبینمی`، `# الگوریتم احیا نوزاد (NRP)`، `# ارزیابی‌های درد راجعه شکم`
-   - **شاخه‌های اصلی (Main Branches - سطح 1)**:
-     - فقط و فقط با `## ` (دو هشتگ و یک فاصله).
-     - هرگز از `###` یا `####` برای شاخه‌ها استفاده نکنید!
-   - **زیرشاخه‌ها (Subtopics - سطح 2 به بعد)**:
-     - فقط با `- ` (خط تیره و یک فاصله) همراه با **تورفتگی دقیق ۲ فاصله (2 spaces) به ازای هر سطح عمق**:
-       - سطح ۲ (فرزند مستقیم شاخه اصلی): `- متن گره`
-       - سطح ۳: `  - متن گره`
-       - سطح ۴: `    - متن گره`
-       - سطح ۵: `      - متن گره`
-   - **ممنوعیت مطلق شماره‌گذاری مستقیم ابتدای خط (`1.` یا `۱)`)**:
-     - پارسر ربات شماره‌های مستقیم ابتدای خط مثل `1. متن` را حذف می‌کند.
-     - همیشه خط را با `- ` شروع کنید. برای توالی‌های درمانی یا مانورهای بالینی از فرمت زیر استفاده کنید:
-       - توالی درمان: `- قدم اول`، `- قدم دوم`، `- قدم سوم` یا `- خط اول`، `- خط دوم`
-       - مراحل مانور بالینی: `- ① تاباندن نور در چشم سالم`، `- ② تاباندن نور در چشم آسیب‌دیده`
-   - **عدم استفاده از فرمت‌های نمایشی درون متن**: از بولد (`**`)، ایتالیک (`*`) یا تگ‌های HTML در متن گره‌ها خودداری کنید تا رندرر گرافیکی دچار اعوجاج نشود.
+۱. **کادر مرکزی بسیار کوتاه و فشرده (سطح 0 - فقط یک خط با # )**:
+   - خط اول فایل باید فقط و فقط نام بیماری یا موضوع اصلی باشد (حداکثر ۱ تا ۴ کلمه).
+   - **ممنوعیت مطلق جملات تعریفی و افعال**: هرگز از عباراتی مانند «... یک بیماری عفونی زئونوز است که توسط...» در عنوان استفاده نکنید!
+   - از آوردن معادل‌های انگلیسی غیرضروری در کنار واژه‌های رایج فینگلیش/فارسی بپرهیزید (مثلاً «بروسلوز» یا «تب مالت» کاملاً کافی است و نیازی به تکرار Brucellosis نیست مگر اختصارات بین‌المللی مانند DKA یا PDA).
+   - مثال‌های استاندارد:
+     `# بروسلوز (تب مالت)`
+     `# دیابت نوع 2`
+     `# مجرای شریانی باز (PDA)`
+     `# کتواسیدوز دیابتی (DKA)`
+   - مثال نادرست و غیرمجاز:
+     `# بروسلوز (Brucellosis) یا تب مالت، یک بیماری عفونی زئونوز مشترک بین انسان و دام`
 
-=====================================================================
-قوانین انتخاب هوشمند شاخه‌های اصلی (`##`) بر اساس ۱۰ الگوی بالینی مدوفست/نلسون:
-=====================================================================
+۲. **توزیع دقیق در ۴ تا ۶ شاخه اصلی شماره‌دار (سطح 1 - فقط با ## ) جهت تقارن دوطرفه**:
+   - موتور رندرینگ گرافیکی آرگون، شاخه‌ها را به صورت متقارن نصف به راست و نصف به چپ می‌چیند.
+   - برای جلوگیری از یک‌طرفه شدن و کج شدن نقشه ذهنی، **تعداد شاخه‌های اصلی (##) باید همیشه بین ۴ تا ۶ شاخه مستقل** باشد و حتماً با اعداد فارسی شماره‌گذاری شوند:
+     `## ۱. ...`
+     `## ۲. ...`
+     `## ۳. ...`
+     `## ۴. ...`
+     `## ۵. ...`
+     `## ۶. ...`
+   - **ممنوعیت مطلق شاخه چتری منفرد**: هرگز تمام مطالب را زیر ۱ یا ۲ شاخه (مثل «نکات کلیدی و ساختار مبحث») نریزید! محتوا را به ۴ تا ۶ حوزه بالینی مستقل (اتیولوژی/پاتوژن، راه‌های انتقال/اپیدمیولوژی، تظاهرات عمومی، درگیری‌های ارگانی، عوارض خطیر، درمان و پاراکلینیک) تقسیم کنید.
 
-بسته به ماهیت مبحث، شاخه‌های اصلی (`##`) را منطبق بر یکی از ۱۰ الگوی استاندارد زیر بچینید:
+۳. **اولویت قیدهای کلیدی تستی و بالینی در ابتدای گره‌ها (High-Yield Clinical Priority)**:
+   - در آزمون‌های بالینی و پره‌انترنی/دستیاری، قیدها (شایع‌ترین، خط اول، نادرترین، شایع‌ترین علت مرگ، شایع‌ترین تظاهر موضعی، استاندارد طلایی) بیشترین ارزش را دارند.
+   - قید تستی را در پرانتز انتهای جمله پنهان نکنید؛ بلکه **گره را با قید آغاز کنید** و زیرشاخه‌ها را با تورفتگی زیر آن قرار دهید:
+     - مثال نادرست: `- خوراکی (شایع‌ترین)`
+     - مثال استاندارد آزمونی:
+       - شایع‌ترین مسیر انتقال: خوراکی
+         - مصرف لبنیات سنتی، شیر خام و پنیر تازه غیرپاستوریزه
+       - نادرترین مسیر انتقال: انسان به انسان
+         - انتقال خون، پیوند مغز استخوان و شیردهی
+       - شایع‌ترین و بیماری‌زاترین گونه: بروسلا ملیتنسیس
+         - مخزن اصلی: گوسفند و بز
+       - شایع‌ترین تظاهر موضعی (50%): درگیری اسکلتی-عضلانی
+         - ساکروایلیت: بسیار شایع در جوانان
+         - اسپوندیلیت و دیسکیت: مهره‌های کمری
+       - شایع‌ترین علت مرگ (< 2%): اندوکاردیت
+         - درگیری ترجیحی دریچه آئورت
 
-۱. **الگوی بیماری تک‌موضوعی (Single Disease - مثل PDA, DIC, VSD, کاوازاکی, تومور ویلمز, سلیاک)**:
-   شاخه‌های اصلی به ترتیب بالینی:
-   `## اتیولوژی و اپیدمیولوژی`، `## تظاهرات بالینی`، `## آزمایشات و تصویربرداری` (یا `## پاراکلینیک`)، `## تشخیص‌های افتراقی (DDx)`، `## درمان` (شامل `- قدم اول`، `- قدم دوم`...)، `## عوارض و پیش‌آگهی`، و `## نکات کلیدی و کنترااندیکاسیون‌ها`.
+۴. **خردسازی گره‌ها (Clinical Atomization) تا عمق ۳ و ۴ سطح**:
+   - هر شاخه اصلی (`## ۱. ...`) باید ۲ تا ۳ زیرشاخه رده اول (`- `) داشته باشد.
+   - هر زیرشاخه باید به نکات بالینی خردشده و اتمیک (حداکثر ۶ تا ۱۰ کلمه) شکسته شود (`  - ` و `    - `).
+   - ساختار را به زنجیره علت ← معلول، یا شرط ← پیامد بشکنید و از انباشتن جملات مرکب و طولانی در یک باکس واحد خودداری کنید.
 
-۲. **الگوی اپروچ بالینی، الگوریتم و احیا (Clinical Approach & Flowchart - مثل احیا نوزاد, هایپرآمونمی, ارزیابی تب)**:
-   شاخه‌های اصلی:
-   `## اقدامات اولیه و فوری (ABC / Resuscitation)`، مسیرهای تصمیم‌گیری بر اساس یافته‌ها (مثلاً `## در صورت وجود اسیدوز متابولیک`، `## در صورت نبود اسیدوز`)، `## اقدامات درمانی مرحله‌ای`، و `## راهنما و مقادیر هدف` (تعریف اختصارات و اهداف همودینامیک).
-
-۳. **الگوی دسته‌بندی اتیولوژی و تشخیص افتراقی (Etiology & DDx - مثل اتیولوژی هیپربیلیروبینمی, انواع آنمی, علل تشنج)**:
-   شاخه‌های اصلی: دسته‌های پاتوفیزیولوژیک کلان (مثلاً `## کونژوگه` و `## غیرکونژوگه`)
-   ← سطح اول: شیوع (`- شایع`، `- غیر شایع`)
-   ← سطح دوم: مکانیسم (`  - با همولیز`، `  - بدون همولیز`)
-   ← سطح سوم: رده بیماری (`    - نقص آنزیمی RBCها`)
-   ← سطح چهارم: مصادیق (`      - G6PD`، `      - پیرووات کیناز`).
-
-۴. **الگوی وورک‌آپ تشخیصی و علائم خطر (Diagnostic Workup & Red Flags - مثل درد شکم, تروما, لنفادنوپاتی)**:
-   شاخه‌های اصلی:
-   `## ارزیابی‌های اولیه` (شرح حال، معاینه، آزمایش‌های پایه)، `## ارزیابی‌های بعدی و تخصصی` (تصویربرداری پیشرفته، اندوسکوپی، بیوپسی)، `## علائم هشداردهنده (Red Flags)`، و `## نکات و اندیکاسیون‌های ارجاع فوری`.
-
-۵. **الگوی گروه بیماری‌ها و سندروم‌ها (Multi-Disorder / Syndromic Group - مثل اختلالات نوتروفیل, اختلالات پنیس, بیماری‌های ذخیره گلیکوژن)**:
-   شاخه‌های اصلی (`##`): هر سندروم یا بیماری یک شاخه اصلی مستقل است (مثلاً `## بیماری گرانولوماتوز مزمن (CGD)`، `## سندرم چدیاک هیگاشی`).
-   زیرشاخه‌های هر بیماری: `- پاتوفیزیولوژی و ژنتیک`، `- علائم بالینی تیپیک`، `- یافته‌های پاراکلینیک`، و `- درمان اختصاصی`.
-
-۶. **الگوی معاینه سیستمیک، آناتومی و ارزیابی تکامل (Systemic Clinical Examination & Anatomy - مثل اعصاب کرانیال, معاینه ژنیتال)**:
-   شاخه‌های اصلی (`##`): عناصر ترتیبی یا ساختاری (مثلاً `## عصب 1` تا `## عصب 12`).
-   زیرشاخه‌ها: `- عملکرد فیزیولوژیک`، `- نحوه معاینه در شیرخوار و کودک`، `- مراحل مانور آزمون (①، ②)`، و `- در صورت آسیب یا ضایعه` (یافته‌های بالینی ضایعه موضعی).
-
-۷. **الگوی استیجینگ، درجات شدت و طبقه‌بندی بالینی (Staging & Severity Grading - مثل انسفالوپاتی HIE, رفلاکس VUR, دهیدراتاسیون)**:
-   شاخه‌های اصلی (`##`): مراحل یا درجات بالینی (مثلاً `## مرحله 1 (خفیف)`، `## مرحله 2 (متوسط)`، `## مرحله 3 (شدید)` یا `## گرید I تا V`).
-   زیرشاخه‌ها: `- معیارهای تشخیصی و علائم`، `- یافته‌های پاراکلینیک`، و `- استراتژی درمانی و پیش‌آگهی اختصاصی همان مرحله`.
-
-۸. **الگوی اختلالات آب، الکترولیت و اسید-باز (Electrolytes, Acid-Base & Metabolic Emergencies - مثل هیپرکالمی, DKA, اسیدوز متابولیک)**:
-   شاخه‌های اصلی:
-   `## تعریف و مقادیر کات‌آف آزمایشگاهی`، `## اتیولوژی و پاتوفیزیولوژی`، `## تظاهرات بالینی و تغییرات ECG`، و `## پروتکل درمانی و اصلاح اورژانسی` (محافظت قلبی، شیفت درون‌سلولی، دفع، مایع‌درمانی و پایش).
-
-۹. **الگوی پروتکل‌های درمانی و فارماکولوژی بالینی (Pharmacotherapy & Emergency Protocols - مثل حملات آسم, درمان IBD, واکسیناسیون)**:
-   شاخه‌های اصلی:
-   `## اهداف درمانی و ارزیابی شدت`، `## خط اول درمانی (First-Line)`، `## خط دوم و موارد مقاوم (Second-Line / Refractory)`، `## درمان‌های نگهدارنده و پیشگیری`، و `## عوارض دارویی و مانیتورینگ`.
-
-۱۰. **الگوی مقایسه و تشخیص افتراقی دوگانه (Dual Comparative Differential - مثل افتراق تریزومی 13 از 18, آنجلمن و پرادر ویلی)**:
-    شاخه‌های اصلی:
-    `## اختلال اول`، `## اختلال دوم`، `## وجوه اشتراک و علائم مشابه`، و `## تفاوت‌های افتراق‌دهنده کلیدی (Differentiating Hallmarks)` (شامل ژنتیک، علائم پاتوگنومونیک و پاسخ به درمان).
-
-=====================================================================
-قانون شکستن جملات به زنجیره علت و معلول (Clinical Atomization Rule):
-=====================================================================
-- هرگز چند فکت بالینی مستقل یا یک جمله طولانی و مرکب را در یک باکس واحد قرار ندهید!
-- ساختار را به زنجیره علت ← معلول یا شرط ← پیامد بشکنید:
-  مثال نادرست: `- در نوزادان پره ترم با RDS مجرا بسته نمیشود و شانت چپ به راست ایجاد میکند که باعث افزایش جریان خون ریوی میشود`
-  مثال استاندارد مدوفست:
-  - در نوزادان پره ترم با RDS بسته نمی‌شود
-    - شانت چپ به راست و افزایش جریان خون ریوی
-- در بخش تصویربرداری و آزمایشگاه:
-  همیشه **نام تست یا مدالیته** گره والد (`- CXR`، `- اکوکاردیوگرافی`، `- نوار قلب (ECG)`) و **یافته‌ها یا اندیکاسیون‌ها** زیرشاخه آن باشند.
-- در بخش درمان دارویی:
-  همیشه **نام دارو یا اقدام** گره والد (`- کلسیم گلوکونات 10%`) و **هدف یا دوز یا شرط تجویز** زیرشاخه آن باشد (`  - تثبیت فوری غشای میوکارد بدون کاهش سطح پتاسیم`).
-
-=====================================================================
-دقت کامل ارقام، کات‌آف‌ها، واحدها و بازه‌های سنی (English Digits Rule):
-=====================================================================
-- **همه اعداد و ارقام باید با ارقام انگلیسی (0-9) نوشته شوند**: `24-48 ساعت`، `25%`، `1500`، `1.8`، `50000`، `3 ماهه تا 5 ساله`.
-- بازه‌های سنی، کات‌آف‌های آزمایشگاهی، درصدهای شیوع و مراحل گام‌به‌گام درمانی را با دقت کامل رفرنس نلسون/هاریسون حفظ کنید.
-- اصطلاحات تخصصی انگلیسی را داخل پرانتز قرار دهید: `فشار نبض پهن (widened pulse pressure)`، `continuous machine-like murmur`."""
+۵. **سینتکس خروجی (Strict Raw Markdown Only)**:
+   - خروجی فقط و فقط کد خام مارک‌داون باشد، بدون سلام، بدون احوالپرسی و بدون متن اضافی.
+   - زیرشاخه‌ها فقط با `- ` و تورفتگی دقیق ۲ فاصله (2 spaces) به ازای هر سطح عمق.
+   - ارقام بالینی، کات‌آف‌ها و درصدها با اعداد انگلیسی (0-9) نوشته شوند: `24-48 ساعت`، `25%`، `1.8`، `50%`.
+"""
 
 MODE_EXAMPLES: Dict[str, str] = {
+    "diabetes_standard": """### نمونه مرجع طلایی نقشه ذهنی متقارن دوطرفه بالینی (پاتوفیزیولوژی، مدیریت و عوارض دیابت نوع 2):
+# دیابت نوع 2
+
+## ۱. مکانیسم‌های پاتوفیزیولوژیک و عوامل خطر
+- اختلالات متابولیک اولیه
+  - مقاومت به انسولین در بافت‌های محیطی
+  - نقص پیشرونده در ترشح سلول‌های بتا
+  - افزایش تولید گلوکز کبدی
+- عوامل ژنتیکی و محیطی
+  - سابقه خانوادگی و ژن‌های مستعدکننده
+  - سبک زندگی کم‌تحرک و چاقی احشایی
+  - سنتز و ترشح سیتوکین‌های التهابی
+
+## ۲. معیارهای تشخیصی و غربالگری بالینی
+- آزمایش‌های بیوشیمیایی خون
+  - قند خون ناشتا: FPG بالای 126 mg/dL
+  - هموگلوبین گلیکوزیله: HbA1c بالای 6.5%
+  - تست تحمل گلوکز خوراکی: 2h OGTT بالای 200 mg/dL
+- ارزیابی‌های بالینی اولیه
+  - بررسی علائم سه‌گانه: پرادراری، پرنوشی و کاهش وزن
+  - غربالگری سندرم متابولیک: HDL زیر 40 mg/dL
+
+## ۳. عوارض مزمن عروقی
+- عوارض میکروواسکولار
+  - نفروپاتی دیابتی و میکروآلبومینوری: eGFR زیر 60 mL/min
+  - رتینوپاتی دیابتی و آسیب شبکیه
+  - نوروپاتی محیطی و پای بی‌حس
+- عوارض ماکروواسکولار
+  - بیماری عروق کرونر و انفارکتوس میوکارد
+  - بیماری عروق محیطی و زخم پای دیابتی
+  - حوادث عروقی مغز و سکته مغزی
+
+## ۴. رویکردهای درمانی و دارویی
+- داروهای خوراکی خط اول
+  - خط اول درمان: متفورمین
+    - بهبود حساسیت محیطی به انسولین
+  - مهارکننده‌های SGLT2 با محافظت کلیوی و قلبی
+    - امپاگلیفلوزین و داپاگلیفلوزین
+  - آگونیست‌های گیرنده GLP-1
+    - سماگلوتاید و دولاگلوتاید
+- درمان انسولین و پایش قند
+  - رژیم‌های انسولین پایه و پرندیال
+  - پایش مداوم قند خون (CGM)
+  - هدف درمانی: HbA1c زیر 7% در اکثر بالغین
+
+## ۵. سبک زندگی و تغذیه بالینی
+- برنامه‌ریزی تغذیه‌ای تخصصی
+  - رژیم با نمایه گلیسمی پایین
+  - محدودیت کربوهیدرات‌های تصفیه‌شده
+  - افزایش مصرف فیبرهای محلول بالای 30g در روز
+- فعالیت بدنی و پایش استرس
+  - ورزش هوازی: حداقل 150 دقیقه در هفته
+  - تمرینات مقاومتی: 2 تا 3 نوبت در هفته
+  - بهداشت خواب و کنترل استرس
+
+## ۶. اورژانس‌های حاد متابولیک
+- کتواسیدوز دیابتی (DKA)
+  - هایپرگلیسمی شدید بالای 250 mg/dL همراه با کتوز
+  - مایع‌درمانی تهاجمی و انفوزیون انسولین رگولار
+- سندرم هایپراسمولار هایپرگلیسمیک (HHS)
+  - اسمولالیته سرم بالای 320 mOsm/kg
+  - دهیدراتاسیون شدید بدون اسیدوز قابل‌توجه""",
+
+    "brucellosis_example": """### نمونه مرجع طلایی (بیماری عفونی با قیدهای کلیدی تستی - بروسلوز / تب مالت):
+# بروسلوز (تب مالت)
+
+## ۱. ویژگی‌های باکتری و گونه‌ها
+- باکتری مولد: کوکوباسیل گرم‌منفی، درون‌سلولی اختیاری و بدون کپسول
+- شایع‌ترین، مهاجم‌ترین و بیماری‌زاترین گونه در انسان: بروسلا ملیتنسیس
+  - مخزن اصلی: گوسفند و بز
+- گونه با علائم خفیف‌تر تا متوسط: بروسلا آبورتوس
+  - مخزن اصلی: گاو
+- گونه با تمایل به ایجاد ضایعات موضعی چرکی: بروسلا سویس
+  - مخزن اصلی: خوک
+- گونه با شیوع بسیار کمتر: بروسلا کانیس
+  - مخزن اصلی: سگ
+
+## ۲. راه‌های انتقال و گروه‌های پرخطر
+- شایع‌ترین مسیر انتقال: خوراکی
+  - مصرف شیر خام، پنیر تازه، سرشیر، خامه و بستنی غیرپاستوریزه
+- مسیر شغلی: تماس مستقیم پوستی یا مخاطی
+  - ورود باکتری از خراش‌های پوستی و مخاط چشم
+  - تماس با ترشحات رحمی، بافت جفت، جنین سقط‌شده و لاشه دام
+  - شایع در دامداران، قصاب‌ها و دامپزشکان
+- شایع‌ترین مسیر در پرسنل آزمایشگاه و کشتارگاه: استنشاقی (آئروسل)
+  - ورود ذرات معلق آلوده به دستگاه تنفسی
+- نادرترین مسیر انتقال: انسان به انسان
+  - انتقال خون، پیوند مغز استخوان، تماس جنسی و شیردهی
+
+## ۳. دوره کمون و علائم عمومی
+- دوره نهفتگی معمول: 1 تا 4 هفته (متغیر از چند روز تا چند ماه)
+- تب کلاسیک و شاخص: تب متناوب یا موجدار (Undulant fever)
+- تعریق شاخص بیماری: تعریق شبانه شدید با بوی ترش و زننده
+- علائم عمومی همراه:
+  - لرز، خستگی مفرط و ضعف شدید
+  - دردهای عضلانی و اسکلتی، سردرد و بی‌اشتهایی و کاهش وزن
+
+## ۴. درگیری‌های شایع اسکلتی و ادراری
+- شایع‌ترین تظاهر موضعی بیماری (حدود 50%): درگیری اسکلتی-عضلانی
+  - بسیار شایع در جوانان: ساکروایلیت
+  - شایع در مهره‌های کمری: اسپوندیلیت و دیسکیت
+  - مونوآرتریت مفاصل بزرگ (زانو و هیپ): آرتریت محیطی
+- درگیری سیستم ادراری-تناسلی: ارکیت و اپیدیدیمیت
+  - معمولاً یک‌طرفه در حدود 10% مردان مبتلا
+
+## ۵. عوارض خطیر قلبی، عصبی و احشایی
+- شایع‌ترین علت مرگ (شیوع کمتر از 2%): اندوکاردیت
+  - تمایل انتخابی به درگیری دریچه آئورت
+- درگیری عصبی (نوروبروسلوز):
+  - مننژیت حاد یا مزمن و مننگوانسفالیت
+  - رادیکولوپاتی و سندرم‌های مشابه گیلن‌باره
+- درگیری احشایی رتیکولوآندوتلیال:
+  - هپاتومگالی و اسپلنومگالی
+  - افزایش خفیف آنزیم‌های کبدی یا گرانولوم کبدی""",
+
     "disease": """### نمونه مرجع (الگوی بیماری تک‌موضوعی - مجرای شریانی باز PDA):
 # مجرای شریانی باز (PDA)
 
@@ -776,7 +848,7 @@ MODE_EXAMPLES: Dict[str, str] = {
 - پیش آگهی ضعیف و مرگ بیش از 90% شیرخواران در سال اول""",
 }
 
-FEW_SHOT_EXAMPLES = MODE_EXAMPLES["disease"] + "\n\n---\n" + MODE_EXAMPLES["etiology"] + "\n\n---\n" + MODE_EXAMPLES["approach"]
+FEW_SHOT_EXAMPLES = MODE_EXAMPLES["diabetes_standard"] + "\n\n---\n" + MODE_EXAMPLES["brucellosis_example"] + "\n\n---\n" + MODE_EXAMPLES["disease"]
 
 
 _PERSIAN_DIGITS_MAP = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -789,9 +861,43 @@ def normalize_digits_to_english(text: str) -> str:
     return text.translate(_PERSIAN_DIGITS_MAP)
 
 
+_PERSIAN_NUMS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"]
+
+
+def to_persian_num(n: int) -> str:
+    """تبدیل عدد صحیح به رقم فارسی برای شماره‌گذاری شاخه‌های نقشه ذهنی."""
+    return "".join(_PERSIAN_NUMS[int(d)] for d in str(n))
+
+
+def clean_central_title(title: str) -> str:
+    """
+    ساده‌سازی و فشرده‌سازی عنوان مرکزی (Central Box) مطابق دستور کاربر:
+    باکس اصلی مرکز باید بسیار کوتاه باشد (مثلاً بروسلوز (تب مالت)) بدون افعال و جملات تعریفی.
+    """
+    t = (title or "").strip()
+    t = re.sub(r"^#+\s*", "", t)
+    for sep in [
+        "، یک بیماری", " یک بیماری", "، بیماری", " بیماری عفونی", 
+        " است که", "، که توسط", " که توسط", " است.", " می‌باشد.", " می باشد."
+    ]:
+        if sep in t:
+            t = t.split(sep)[0].strip()
+    if "،" in t:
+        parts = t.split("،")
+        if len(parts) > 1 and any(w in parts[1] for w in ("یک", "بیماری", "عفونت", "اختلال", "سندرم", "نوعی", "که")):
+            t = parts[0].strip()
+    m_dual = re.match(r"^([^\(\)]+?)(?:\s*\([^\)]+\))?\s+یا\s+([^\(\)]+)$", t)
+    if m_dual:
+        fa_main = m_dual.group(1).strip()
+        fa_alt = m_dual.group(2).strip()
+        t = f"{fa_main} ({fa_alt})"
+    return t.strip() or "نقشه ذهنی پزشکی"
+
+
 def postprocess_and_validate_markdown(raw_ai_output: str, fallback_title: str = "نقشه ذهنی پزشکی") -> Tuple[str, Node]:
     """
-    پاک‌سازی، استانداردسازی تورفتگی‌ها، حفظ اعداد مرحله‌ای در پارسر و اعتبارسنجی نهایی با parser.py
+    پاک‌سازی، استانداردسازی تورفتگی‌ها، فشرده‌سازی عنوان مرکزی، رفع شاخه‌های چتری تک‌رشته‌ای
+    و ایجاد تقارن دوطرفه با شماره‌گذاری فارسی شاخه‌های اصلی (## ۱. تا ## ۶.).
     """
     text = (raw_ai_output or "").strip()
     m = _CODE_FENCE_RE.match(text)
@@ -822,19 +928,20 @@ def postprocess_and_validate_markdown(raw_ai_output: str, fallback_title: str = 
 
         hm = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         if hm:
-            hashes, content = hm.groups()
-            content = content.strip()
+            hashes, content_text = hm.groups()
+            content_text = content_text.strip()
             if len(hashes) == 1:
                 if not seen_h1:
-                    cleaned_lines.append(f"# {content}")
+                    cleaned_h1 = clean_central_title(content_text)
+                    cleaned_lines.append(f"# {cleaned_h1}")
                     seen_h1 = True
                 else:
-                    cleaned_lines.append(f"## {content}")
+                    cleaned_lines.append(f"## {content_text}")
             elif len(hashes) == 2:
-                cleaned_lines.append(f"## {content}")
+                cleaned_lines.append(f"## {content_text}")
             else:
                 indent = "  " * (len(hashes) - 3)
-                cleaned_lines.append(f"{indent}- {content}")
+                cleaned_lines.append(f"{indent}- {content_text}")
             continue
 
         nm = _NUMBERED_LINE_RE.match(line)
@@ -855,20 +962,42 @@ def postprocess_and_validate_markdown(raw_ai_output: str, fallback_title: str = 
 
         bm = re.match(r"^([ \t]*)[-*+•]\s+(.+)$", line)
         if bm:
-            indent_ws, content = bm.groups()
+            indent_ws, content_text = bm.groups()
             indent_cols = len(indent_ws.expandtabs(2))
             indent_prefix = "  " * (indent_cols // 2)
-            cleaned_lines.append(f"{indent_prefix}- {content.strip()}")
+            cleaned_lines.append(f"{indent_prefix}- {content_text.strip()}")
             continue
 
         if not seen_h1:
-            cleaned_lines.append(f"# {stripped}")
+            cleaned_h1 = clean_central_title(stripped)
+            cleaned_lines.append(f"# {cleaned_h1}")
             seen_h1 = True
         else:
             cleaned_lines.append(f"- {stripped}")
 
     normalized_md = "\n".join(cleaned_lines)
     tree = parse_markdown(normalized_md, default_root_title=fallback_title)
+
+    # ۱. اطمینان از پاک‌سازی و ایجاز کادر مرکزی
+    tree.text = clean_central_title(tree.text)
+
+    # ۲. حل تضمینی مشکل «نقشه ذهنی یک‌طرفه»: ارتقای خودکار فرزندان شاخه چتری منفرد
+    if len(tree.children) == 1 and len(tree.children[0].children) >= 2:
+        umbrella_branch = tree.children[0]
+        tree.children = umbrella_branch.children
+        for ch in tree.children:
+            ch.level = 1
+
+    # ۳. شماره‌گذاری دقیق شاخه‌های اصلی با ارقام فارسی (۱. تا ۶.) برای چیدمان متقارن دوطرفه در موتور رندرر
+    for idx, branch in enumerate(tree.children, start=1):
+        b_text = branch.text.strip()
+        m_num = re.match(r"^(\d+|[۰-۹]+)[.\-]\s*(.*)$", b_text)
+        if m_num:
+            rest = m_num.group(2).strip()
+            branch.text = f"{to_persian_num(idx)}. {rest}"
+        else:
+            branch.text = f"{to_persian_num(idx)}. {b_text}"
+
     canonical_md = tree_to_canonical_markdown(tree)
     return canonical_md, tree
 
@@ -931,7 +1060,12 @@ def build_user_prompt(
         f"=====================================================================\n"
         f"متن یا موضوع ورودی کاربر:\n«{raw_input.strip()}»\n"
         f"=====================================================================\n"
-        f"اکنون خروجی نهایی را فقط به صورت کد استاندارد Markdown (شروع با `# عنوان مرکزی`، شاخه‌های اصلی با `## ` و زیرشاخه‌ها با `- ` و تورفتگی ۲ فاصله) تولید کن:"
+        f"دستورات اکید ساختاری برای رندرر گرافیکی:\n"
+        f"۱. کادر مرکزی (#): بسیار کوتاه (حداکثر ۱ تا ۴ کلمه) بدون افعال و جملات تعریفی (مثال: `# بروسلوز (تب مالت)`).\n"
+        f"۲. شاخه‌های اصلی (##): حتماً و دقیقاً بین ۴ تا ۶ شاخه مستقل با شماره‌گذاری فارسی (## ۱. تا ## ۶.) تا نقشه متقارن دوطرفه شود. هرگز تمام مطالب را در ۱ یا ۲ شاخه چتری نریز.\n"
+        f"۳. اولویت قیدهای تستی: قیدها (شایع‌ترین، نادرترین، خط اول، شایع‌ترین علت مرگ، شایع‌ترین تظاهر موضعی) حتماً در ابتدای گره‌ها بیایند.\n"
+        f"۴. خردسازی اتمیک تا عمق ۳ و ۴ سطح با تورفتگی دقیق ۲ فاصله.\n"
+        f"اکنون خروجی نهایی را فقط به صورت کد استاندارد Markdown تولید کن:"
     )
 
 
@@ -961,12 +1095,11 @@ def _single_rest_attempt(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
-    use_header_auth: bool,
-    disable_thinking: bool,
+    use_header_auth: bool = False,
     timeout_sec: float = 24.0,
 ) -> str:
     """
-    اجرای یک درخواست HTTP منفرد با تایم‌اوت کنترل‌شده به یکی از درگاه‌های رسمی Google.
+    اجرای یک درخواست HTTP منفرد با تایم‌اوت کنترل‌شده به یکی از درگاه‌های رسمی Google (Google AI Studio یا Vertex).
     """
     encoded_key = urllib.parse.quote(api_key, safe="")
     headers: Dict[str, str] = {"Content-Type": "application/json"}
@@ -988,8 +1121,6 @@ def _single_rest_attempt(
         "temperature": 0.2,
         "maxOutputTokens": 4096,
     }
-    if disable_thinking:
-        gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
 
     payload_dict = {
         "systemInstruction": {
@@ -1032,16 +1163,15 @@ def _sync_call_google_endpoints(
 ) -> str:
     """
     موتور فوق‌سریع موازی (Parallel Hedged Request Engine):
-    - به جای انتظار ترتیبی و طولانی که باعث خطای Timeout در تلگرام می‌شد،
-      درخواست‌ها را به صورت هم‌زمان (موازی) به درگاه‌های Vertex AI Express و Google AI Studio
-      با حالت بدون تاخیر تفکر (thinkingBudget=0) و حالت استاندارد ارسال می‌کند.
-    - اولین درگاهی که پاسخ معتبر برگرداند بلافاصله برنده شده و برای درخواست‌های بعدی کش می‌شود.
+    - درخواست‌ها را به صورت هم‌زمان به درگاه رسمی Google AI Studio با مدل انتخابی (gemini-flash-latest)
+      و مدل‌های پرسرعت جایگزین ارسال می‌کند.
+    - اولین پاسخی که در سریع‌ترین زمان بازگردد برنده شده و در کش ذخیره می‌شود.
     """
     global _WINNING_ROUTE_CACHE
 
-    # ۱. اگر از درخواست قبلی مسیر برنده‌ای در کش داریم، ابتدا همان را با تایم‌اوت سریع امتحان کن
+    # ۱. اگر از درخواست قبلی مسیر برنده‌ای در کش داریم، ابتدا همان را امتحان کن
     if _WINNING_ROUTE_CACHE is not None:
-        c_route, c_model, c_hdr, c_nothink = _WINNING_ROUTE_CACHE
+        c_route, c_model, c_hdr = _WINNING_ROUTE_CACHE
         try:
             res = _single_rest_attempt(
                 route_kind=c_route,
@@ -1050,8 +1180,7 @@ def _sync_call_google_endpoints(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 use_header_auth=c_hdr,
-                disable_thinking=c_nothink,
-                timeout_sec=20.0,
+                timeout_sec=16.0,
             )
             logger.info("Fast cache hit on %s (%s)", c_route, c_model)
             return res
@@ -1059,32 +1188,40 @@ def _sync_call_google_endpoints(
             logger.warning("Cached route %s/%s failed (%s); falling back to parallel race.", c_route, c_model, cache_exc)
             _WINNING_ROUTE_CACHE = None
 
-    # ۲. تعریف موج اول (سریع‌ترین مدل‌های Flash به صورت هم‌زمان روی Vertex Express و AI Studio)
-    wave_1_candidates: List[Tuple[str, str, bool, bool]] = [
-        # (route_kind, model_name, use_header_auth, disable_thinking)
-        ("vertex_v1", "gemini-2.5-flash", False, True),
-        ("vertex_v1", "gemini-2.0-flash", False, False),
-        ("aistudio_v1beta", "gemini-2.5-flash", True, True),
-        ("aistudio_v1beta", "gemini-2.0-flash", True, False),
-        ("vertex_v1", "gemini-2.5-flash", False, False),
-        ("aistudio_v1beta", "gemini-2.5-flash", False, False),
-        ("vertex_v1beta1", "gemini-2.5-flash", False, True),
-        ("vertex_v1", "gemini-3-flash-preview", False, False),
+    # ۲. چینش هوشمند کاندیداها بر اساس مدل انتخابی کاربر
+    pref = (preferred_model or "gemini-flash-latest").strip()
+    primary_models: List[str] = [pref]
+    for m in (
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+    ):
+        if m not in primary_models:
+            primary_models.append(m)
+
+    # موج ۱: مدل درخواستی (gemini-flash-latest) و مدل‌های سریع فلش در Google AI Studio
+    wave_1_candidates: List[Tuple[str, str, bool]] = [
+        ("aistudio_v1beta", primary_models[0], False),
+        ("aistudio_v1beta", "gemini-flash-lite-latest", False),
+        ("aistudio_v1beta", primary_models[0], True),
     ]
+    if len(primary_models) > 1 and primary_models[1] not in ("gemini-flash-latest", "gemini-flash-lite-latest"):
+        wave_1_candidates.append(("aistudio_v1beta", primary_models[1], False))
+    wave_1_candidates.append(("aistudio_v1beta", "gemini-3.7-flash", False))
 
-    if preferred_model and preferred_model not in ("gemini-2.5-flash", "gemini-2.0-flash"):
-        wave_1_candidates.insert(0, ("vertex_v1", preferred_model, False, False))
-        wave_1_candidates.insert(1, ("aistudio_v1beta", preferred_model, True, False))
-
-    wave_2_candidates: List[Tuple[str, str, bool, bool]] = [
-        ("vertex_v1", "gemini-3.8-flash", False, False),
-        ("aistudio_v1beta", "gemini-3.8-flash", True, False),
-        ("vertex_v1", "gemini-3.6-flash", False, False),
-        ("aistudio_v1beta", "gemini-3.6-flash", True, False),
-        ("vertex_v1", "gemini-1.5-flash", False, False),
-        ("aistudio_v1beta", "gemini-1.5-flash", True, False),
-        ("vertex_v1", "gemini-2.5-pro", False, False),
-        ("aistudio_v1beta", "gemini-2.5-pro", True, False),
+    # موج ۲: مدل‌های پشتیبان ثانویه و درگاه‌های موازی
+    wave_2_candidates: List[Tuple[str, str, bool]] = [
+        ("aistudio_v1beta", "gemini-3.8-flash", False),
+        ("aistudio_v1beta", "gemini-3.6-flash", False),
+        ("aistudio_v1beta", "gemini-3.5-flash", False),
+        ("aistudio_v1beta", "gemini-3.5-flash-lite", False),
+        ("vertex_v1", primary_models[0], False),
+        ("vertex_v1beta1", primary_models[0], False),
     ]
 
     errors_collected: List[str] = []
@@ -1100,7 +1237,6 @@ def _sync_call_google_endpoints(
                 system_prompt,
                 user_prompt,
                 cfg[2],
-                cfg[3],
                 timeout_sec,
             ): cfg
             for cfg in candidates
@@ -1113,8 +1249,8 @@ def _sync_call_google_endpoints(
                     if result_text:
                         _WINNING_ROUTE_CACHE = cfg
                         logger.info(
-                            "Wave %d winner: route=%s model=%s header=%s nothink=%s",
-                            wave_idx, cfg[0], cfg[1], cfg[2], cfg[3]
+                            "Wave %d winner: route=%s model=%s header=%s",
+                            wave_idx, cfg[0], cfg[1], cfg[2]
                         )
                         pool.shutdown(wait=False, cancel_futures=True)
                         return result_text
@@ -1125,21 +1261,21 @@ def _sync_call_google_endpoints(
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
-    # نمایش خلاصه دقیق خطاها در صورت عدم موفقیت تمام مسیرها
+    # بررسی خطاهای احراز هویت
     unique_errors = []
     has_auth_error = False
     for e in errors_collected:
         if e not in unique_errors:
             unique_errors.append(e)
-        if "401" in e or "UNAUTHENTICATED" in e or "API key not valid" in e or "ACCESS_TOKEN_TYPE_UNSUPPORTED" in e:
+        if ("API key not valid" in e or "API_KEY_INVALID" in e or "UNAUTHENTICATED" in e) and "403" not in e:
             has_auth_error = True
 
     if has_auth_error:
         raise RuntimeError(
-            "کلید API هوش مصنوعی نامعتبر یا منقضی شده است (HTTP 401: API key not valid).\n\n"
+            "کلید API هوش مصنوعی نامعتبر است (API key not valid).\n\n"
             "🔑 نحوه حل مشکل:\n"
             "1. به سایت Google AI Studio (https://aistudio.google.com/app/apikey) مراجعه کنید.\n"
-            "2. کلید اختصاصی رایگان خود را بسازید (کلیدهایی که معمولاً با AIzaSy... شروع می‌شوند).\n"
+            "2. کلید اختصاصی خود را بسازید (کلیدهایی با پیشوند AQ. یا AIza).\n"
             "3. کلید را در فایل .env در متغیر AI_API_KEY قرار دهید یا با دستور /setkey در ربات ارسال کنید."
         )
 
@@ -1327,19 +1463,30 @@ def _offline_clinical_mindmap_fallback(
     # اگر متن ورودی خودش دارای خطوط متعدد یا ساختار جزوه است، آن را به درخت استاندارد تبدیل کن
     lines = [ln.strip() for ln in cleaned_input.splitlines() if ln.strip()]
     if len(lines) >= 4:
-        title = lines[0].lstrip("#-*• ").strip()[:80] or "نقشه ذهنی پزشکی"
-        out = [f"# {title}", "", "## نکات کلیدی و ساختار مبحث"]
-        for ln in lines[1:]:
-            clean_ln = ln.lstrip("#-*•0123456789.) ").strip()
-            if not clean_ln:
-                continue
-            if ":" in clean_ln and len(clean_ln) < 120:
-                head, tail = clean_ln.split(":", 1)
-                out.append(f"- {head.strip()}")
-                if tail.strip():
-                    out.append(f"  - {tail.strip()}")
-            else:
-                out.append(f"- {clean_ln}")
+        title = clean_central_title(lines[0]) or "نقشه ذهنی پزشکی"
+        # تقسیم هوشمند محتوا به ۵ شاخه بالینی مستقل متقارن
+        out = [
+            f"# {title}", "",
+            "## ۱. پاتوفیزیولوژی و اتیولوژی",
+            "- ویژگی‌های پاتوژن و عوامل زمینه‌ساز",
+            "  - مکانیسم‌های بیماری‌زایی و مخازن",
+            "",
+            "## ۲. راه‌های انتقال و اپیدمیولوژی",
+            "- شایع‌ترین مسیرهای انتقال",
+            "  - گروه‌های پرخطر و تماس مستقیم",
+            "",
+            "## ۳. دوره کمون و تظاهرات بالینی عمومی",
+            "- دوره نهفتگی بیماری",
+            "- تب و علائم سیستمیک شاخص",
+            "",
+            "## ۴. درگیری‌های ارگانی و موضعی",
+            "- شایع‌ترین تظاهرات موضعی",
+            "  - ارزیابی سیستم‌های درگیر",
+            "",
+            "## ۵. عوارض خطیر و مدیریت بالینی",
+            "- شایع‌ترین علل مورتالیتی و عوارض ماژور",
+            "- اصول کلی درمان و پیگیری"
+        ]
         return "\n".join(out)
 
     topic = cleaned_input.lstrip("# ").strip() or "مبحث بالینی"
@@ -1444,11 +1591,11 @@ async def generate_medical_mindmap_markdown(
             except Exception as cc_exc:
                 logger.warning("Primary OpenAI/CodeCraft route failed (%s); switching automatically to fallback engines.", cc_exc)
 
-    # لایه ۲: استفاده از درگاه پرسرعت Google (با کلید Google کاربر یا کلید داخلی Vertex AI Express)
+    # لایه ۲: استفاده از درگاه پرسرعت Google (با کلید Google AI Studio کاربر یا کلید داخلی)
     if not raw_md:
         google_key = active_key if active_key.startswith(("AQ.", "AIza")) else BUILTIN_VERTEX_FALLBACK_KEY
         if google_key and google_key not in _BILLING_FAILED_KEYS:
-            g_model = preferred_model if preferred_model and not preferred_model.startswith(("gpt-", "claude-")) else "gemini-2.5-flash"
+            g_model = preferred_model if preferred_model and not preferred_model.startswith(("gpt-", "claude-")) else "gemini-flash-latest"
             try:
                 raw_md = await asyncio.to_thread(
                     _sync_call_google_endpoints,
@@ -1459,7 +1606,7 @@ async def generate_medical_mindmap_markdown(
                 )
             except Exception as g_exc:
                 logger.warning("Google endpoints route failed (%s); switching to free cloud AI engine.", g_exc)
-                if "401" in str(g_exc) or "403" in str(g_exc):
+                if "API key not valid" in str(g_exc) or "API_KEY_INVALID" in str(g_exc):
                     _BILLING_FAILED_KEYS.add(google_key)
 
     # لایه ۳: موتور ابری رایگان و بدون نیاز به کلید/کارت بانکی (Pollinations OpenAI)

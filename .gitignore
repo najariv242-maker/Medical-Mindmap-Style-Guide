@@ -1,0 +1,24 @@
+# Secrets and environment variables
+.env
+.env.local
+.env.*.local
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+ENV/
+
+# Temporary test scripts
+test_*.py
+list_models.py
+
+# OS / IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

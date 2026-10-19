@@ -303,8 +303,8 @@ async def cmd_setkey(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             text=(
                 "🔑 <b>نحوه تنظیم کلید هوش مصنوعی:</b>\n\n"
                 "لطفاً کلید خود را بعد از دستور <code>/setkey</code> ارسال کنید؛ مثال:\n"
-                "<code>/setkey cc_ItgqjcOWGe7Gp267hWOSMAi5TBqEvJvhbANaJ8LCqg5dtqci</code>\n\n"
-                "یا کلید را که با <code>cc_</code> یا <code>AIza</code> شروع می‌شود مستقیماً در چت بفرستید."
+                "<code>/setkey AQ.Ab8RN6KWuLT-fUlCygajyDzunN7T21lP-RBU7Y3t_uOOv5dgAQ</code>\n\n"
+                "یا کلید Google AI Studio (شروع با <code>AQ.</code> یا <code>AIza</code>) یا CodeCraft (شروع با <code>cc_</code>) را مستقیماً در چت بفرستید."
             ),
             parse_mode=ParseMode.HTML,
         )
@@ -313,7 +313,7 @@ async def cmd_setkey(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if save_api_key_to_env(args_text):
         AI_API_KEY = get_active_api_key(args_text)
         masked = f"{AI_API_KEY[:6]}...{AI_API_KEY[-4:]}" if len(AI_API_KEY) > 12 else AI_API_KEY
-        provider = "CodeCraft API" if AI_API_KEY.startswith("cc_") else "Google / OpenAI API"
+        provider = "CodeCraft API" if AI_API_KEY.startswith("cc_") else ("Google AI Studio (Gemini)" if AI_API_KEY.startswith(("AQ.", "AIza")) else "OpenAI API")
         await message.reply_text(
             text=(
                 f"✅ <b>کلید هوش مصنوعی با موفقیت ذخیره و فعال شد!</b>\n"
@@ -388,14 +388,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not raw_text:
         return WAIT_INPUT
 
-    # تشخیص خودکار در صورتی که کاربر کلید API را مستقیماً بدون /setkey ارسال کرده باشد
-    if re.match(r"^(?:cc_[A-Za-z0-9_\-]{20,}|AIza[A-Za-z0-9_\-]{25,}|sk-[A-Za-z0-9_\-]{20,})$", raw_text):
+    # تشخیص خودکار در صورتی که کاربر کلید API را مستقیماً بدون /setkey ارسال کرده باشد (شامل AQ. و AIza و cc_ و sk-)
+    if re.match(r"^(?:cc_[A-Za-z0-9_\-]{20,}|AIza[A-Za-z0-9_\-]{25,}|AQ\.[A-Za-z0-9_\-]{20,}|sk-[A-Za-z0-9_\-]{20,})$", raw_text):
         if save_api_key_to_env(raw_text):
             AI_API_KEY = get_active_api_key(raw_text)
             masked = f"{AI_API_KEY[:6]}...{AI_API_KEY[-4:]}"
+            provider = "Google AI Studio (Gemini)" if AI_API_KEY.startswith(("AQ.", "AIza")) else ("CodeCraft API" if AI_API_KEY.startswith("cc_") else "OpenAI API")
             await message.reply_text(
                 text=(
                     f"✅ <b>کلید هوش مصنوعی شناسایی و به صورت خودکار فعال شد!</b>\n"
+                    f"🔹 <b>سرویس:</b> <code>{_esc(provider)}</code>\n"
                     f"🔑 <b>کلید فعال:</b> <code>{_esc(masked)}</code>\n\n"
                     "حالا نام بیماری یا متن پزشکی خود را ارسال کنید."
                 ),
