@@ -1446,6 +1446,100 @@ def _sync_call_free_cloud_fallbacks(
     raise RuntimeError(" | ".join(errors[:3]) if errors else "Free cloud fallback failed")
 
 
+def parse_raw_medical_text_to_mindmap(raw_text: str) -> str:
+    """
+    موتور ساختاردهنده هوشمند متون خام و جزوات پزشکی (Intelligent Clinical Text Structurer):
+    متن ورودی شامل تیترها، بخش‌ها، داروها و تست‌ها را بدون حذف هیچ‌یک از جزئیات،
+    به یک نقشه ذهنی متقارن استاندارد با ۴ تا ۶ شاخه اصلی شماره‌دار تبدیل می‌کند.
+    """
+    raw_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+    if not raw_lines:
+        return "# نقشه ذهنی پزشکی\n\n## ۱. کلیات مبحث\n- فاقد محتوای متنی"
+
+    title = clean_central_title(raw_lines[0])
+    
+    section_keywords = [
+        "گونه", "مخزن", "انتقال", "اپیدمیولوژی", "بالینی", "تظاهرات", "علائم", 
+        "تشخیص", "آزمایش", "پاراکلینیک", "کشت", "سرولوژی", "درمان", "رژیم", 
+        "دارو", "عوارض", "پیشگیری", "اتیولوژی", "پاتوفیزیولوژی", "پیش‌آگهی"
+    ]
+    
+    sections = [] # list of (title, [lines])
+    current_sec_title = "پاتوفیزیولوژی و کلیات بیماری"
+    current_sec_lines = []
+
+    for idx, line in enumerate(raw_lines[1:], start=1):
+        clean_ln = line.strip()
+        is_heading = False
+        if len(clean_ln) < 60 and not clean_ln.endswith((".", "،", "؛")):
+            if any(k in clean_ln for k in section_keywords) and (":" not in clean_ln or clean_ln.endswith(":")):
+                is_heading = True
+        
+        if is_heading:
+            if current_sec_lines:
+                sections.append((current_sec_title, current_sec_lines))
+                current_sec_lines = []
+            current_sec_title = clean_ln.rstrip(":")
+        else:
+            current_sec_lines.append(clean_ln)
+
+    if current_sec_lines:
+        sections.append((current_sec_title, current_sec_lines))
+
+    # اگر تعداد بخش‌ها بالای ۶ است، بخش‌های کشت و سرولوژی یا تشخیص را ادغام کن
+    merged_sections = []
+    i = 0
+    while i < len(sections):
+        s_title, s_items = sections[i]
+        if ("کشت" in s_title or "سرولوژی" in s_title or "تشخیص" in s_title) and i + 1 < len(sections):
+            next_title, next_items = sections[i+1]
+            if "کشت" in next_title or "سرولوژی" in next_title or "تشخیص" in next_title:
+                merged_sections.append(("روش‌های تشخیص (کشت، سرولوژی و مولکولی)", s_items + next_items))
+                i += 2
+                continue
+        merged_sections.append((s_title, s_items))
+        i += 1
+
+    sections = merged_sections[:6] # حداکثر ۶ شاخه متقارن
+
+    out = [f"# {title}", ""]
+    
+    for sec_idx, (sec_name, sec_items) in enumerate(sections, start=1):
+        p_num = to_persian_num(sec_idx)
+        clean_sec_name = re.sub(r"^(\d+|[۰-۹]+)[.\-]\s*", "", sec_name).strip()
+        out.append(f"## {p_num}. {clean_sec_name}")
+        
+        for item in sec_items:
+            clean_item = item.lstrip("-*•0123456789.) ").strip()
+            if not clean_item:
+                continue
+                
+            if ":" in clean_item:
+                head, tail = clean_item.split(":", 1)
+                head = head.strip()
+                tail = tail.strip()
+                
+                # بهینه‌سازی قیدهای تستی
+                if "شایعترین" in head or "شایع‌ترین" in head:
+                    head = "شایع‌ترین: " + head.replace("شایعترین", "").replace("شایع‌ترین", "").strip()
+                elif "نادر" in head:
+                    head = "نادر: " + head.replace("نادر", "").strip()
+                    
+                out.append(f"- {head}")
+                if tail:
+                    if len(tail) > 75 and ("." in tail or "،" in tail):
+                        sub_parts = [p.strip() for p in re.split(r"[.؛]\s*", tail) if p.strip()]
+                        for sp in sub_parts:
+                            out.append(f"  - {sp}")
+                    else:
+                        out.append(f"  - {tail}")
+            else:
+                out.append(f"- {clean_item}")
+        out.append("")
+
+    return "\n".join(out).strip()
+
+
 def _offline_clinical_mindmap_fallback(
     raw_input: str,
     template_mode: str = "auto",
@@ -1460,34 +1554,11 @@ def _offline_clinical_mindmap_fallback(
         base_md = previous_markdown.strip()
         return f"{base_md}\n\n## نکات تکمیلی ({edit_instruction.strip()[:40]})\n- بررسی بالینی و پیگیری بر اساس دستور جدید\n  - پایش علائم حیاتی و پاسخ به درمان"
 
-    # اگر متن ورودی خودش دارای خطوط متعدد یا ساختار جزوه است، آن را به درخت استاندارد تبدیل کن
+    # اگر متن ورودی خودش دارای خطوط متعدد یا ساختار جزوه است، آن را با تمام جزئیات و بدون هیچ حذفیاتی به نقشه استاندارد تبدیل کن
     lines = [ln.strip() for ln in cleaned_input.splitlines() if ln.strip()]
     if len(lines) >= 4:
-        title = clean_central_title(lines[0]) or "نقشه ذهنی پزشکی"
-        # تقسیم هوشمند محتوا به ۵ شاخه بالینی مستقل متقارن
-        out = [
-            f"# {title}", "",
-            "## ۱. پاتوفیزیولوژی و اتیولوژی",
-            "- ویژگی‌های پاتوژن و عوامل زمینه‌ساز",
-            "  - مکانیسم‌های بیماری‌زایی و مخازن",
-            "",
-            "## ۲. راه‌های انتقال و اپیدمیولوژی",
-            "- شایع‌ترین مسیرهای انتقال",
-            "  - گروه‌های پرخطر و تماس مستقیم",
-            "",
-            "## ۳. دوره کمون و تظاهرات بالینی عمومی",
-            "- دوره نهفتگی بیماری",
-            "- تب و علائم سیستمیک شاخص",
-            "",
-            "## ۴. درگیری‌های ارگانی و موضعی",
-            "- شایع‌ترین تظاهرات موضعی",
-            "  - ارزیابی سیستم‌های درگیر",
-            "",
-            "## ۵. عوارض خطیر و مدیریت بالینی",
-            "- شایع‌ترین علل مورتالیتی و عوارض ماژور",
-            "- اصول کلی درمان و پیگیری"
-        ]
-        return "\n".join(out)
+        return parse_raw_medical_text_to_mindmap(cleaned_input)
+
 
     topic = cleaned_input.lstrip("# ").strip() or "مبحث بالینی"
     mode = template_mode if template_mode != "auto" else find_topic_archetype(topic)[0]
