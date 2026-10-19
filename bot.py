@@ -55,6 +55,8 @@ from ai_engine import (
     ENRICH_MODES,
     TEMPLATE_MODES,
     generate_medical_mindmap_markdown,
+    get_active_api_key,
+    save_api_key_to_env,
 )
 from keep_alive import keep_alive
 from parser import Node, tree_to_opml
@@ -64,13 +66,7 @@ BOT_TOKEN = (
     or os.getenv("BOT_TOKEN")
     or ""
 ).strip()
-AI_API_KEY = (
-    os.getenv("AI_API_KEY")
-    or os.getenv("GEMINI_API_KEY")
-    or os.getenv("GOOGLE_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
-    or DEFAULT_AI_API_KEY
-).strip()
+AI_API_KEY = get_active_api_key()
 MAX_CONCURRENT_AI_CALLS = int(os.getenv("MAX_CONCURRENT_AI_CALLS", "3"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -289,6 +285,52 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+async def cmd_setkey(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """تنظیم و ذخیره فوری کلید API هوش مصنوعی با دستور /setkey"""
+    global AI_API_KEY
+    message = update.effective_message
+    if not message:
+        return WAIT_INPUT
+
+    args_text = " ".join(context.args).strip() if context.args else ""
+    if not args_text and message.text:
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) > 1:
+            args_text = parts[1].strip()
+
+    if not args_text:
+        await message.reply_text(
+            text=(
+                "🔑 <b>نحوه تنظیم کلید هوش مصنوعی:</b>\n\n"
+                "لطفاً کلید خود را بعد از دستور <code>/setkey</code> ارسال کنید؛ مثال:\n"
+                "<code>/setkey cc_ItgqjcOWGe7Gp267hWOSMAi5TBqEvJvhbANaJ8LCqg5dtqci</code>\n\n"
+                "یا کلید را که با <code>cc_</code> یا <code>AIza</code> شروع می‌شود مستقیماً در چت بفرستید."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return WAIT_INPUT
+
+    if save_api_key_to_env(args_text):
+        AI_API_KEY = get_active_api_key(args_text)
+        masked = f"{AI_API_KEY[:6]}...{AI_API_KEY[-4:]}" if len(AI_API_KEY) > 12 else AI_API_KEY
+        provider = "CodeCraft API" if AI_API_KEY.startswith("cc_") else "Google / OpenAI API"
+        await message.reply_text(
+            text=(
+                f"✅ <b>کلید هوش مصنوعی با موفقیت ذخیره و فعال شد!</b>\n"
+                f"🔹 <b>سرویس:</b> <code>{_esc(provider)}</code>\n"
+                f"🔑 <b>کلید فعال:</b> <code>{_esc(masked)}</code>\n\n"
+                "اکنون می‌توانید مبحث پزشکی یا متن خود را برای تولید نقشه ذهنی ارسال کنید."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await message.reply_text(
+            text="⚠️ کلید واردشده معتبر نیست. لطفاً یک کلید معتبر ارسال کنید.",
+            parse_mode=ParseMode.HTML,
+        )
+    return WAIT_INPUT
+
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     message = update.effective_message
     doc = message.document if message else None
@@ -340,10 +382,26 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    global AI_API_KEY
     message = update.effective_message
     raw_text = ((message.text if message else "") or "").strip()
     if not raw_text:
         return WAIT_INPUT
+
+    # تشخیص خودکار در صورتی که کاربر کلید API را مستقیماً بدون /setkey ارسال کرده باشد
+    if re.match(r"^(?:cc_[A-Za-z0-9_\-]{20,}|AIza[A-Za-z0-9_\-]{25,}|sk-[A-Za-z0-9_\-]{20,})$", raw_text):
+        if save_api_key_to_env(raw_text):
+            AI_API_KEY = get_active_api_key(raw_text)
+            masked = f"{AI_API_KEY[:6]}...{AI_API_KEY[-4:]}"
+            await message.reply_text(
+                text=(
+                    f"✅ <b>کلید هوش مصنوعی شناسایی و به صورت خودکار فعال شد!</b>\n"
+                    f"🔑 <b>کلید فعال:</b> <code>{_esc(masked)}</code>\n\n"
+                    "حالا نام بیماری یا متن پزشکی خود را ارسال کنید."
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+            return WAIT_INPUT
 
     editing_token = context.user_data.get("_active_edit_token")
     if isinstance(editing_token, str) and editing_token:
@@ -430,7 +488,7 @@ async def _execute_ai_generation(
                     enrich_mode=enrich_mode,
                     edit_instruction=edit_instruction,
                     previous_markdown=str(session.get("markdown_text") or "") if edit_instruction else None,
-                    api_key=AI_API_KEY,
+                    api_key=get_active_api_key(),
                 ),
                 timeout=_AI_TIMEOUT_SEC,
             )
@@ -625,9 +683,11 @@ def main() -> None:
         pattern=rf"^{_CB_ACT}[0-9a-f]+:(?:edit|opml|reselect)$",
     )
 
+    setkey_handler = CommandHandler("setkey", cmd_setkey)
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", cmd_start),
+            setkey_handler,
             doc_handler,
             text_handler,
             gen_cb_handler,
@@ -635,25 +695,28 @@ def main() -> None:
         ],
         states={
             WAIT_INPUT: [
+                setkey_handler,
                 doc_handler,
                 text_handler,
                 gen_cb_handler,
                 act_cb_handler,
             ],
             WAIT_MODE: [
+                setkey_handler,
                 gen_cb_handler,
                 act_cb_handler,
                 doc_handler,
                 text_handler,
             ],
             WAIT_EDIT_TEXT: [
+                setkey_handler,
                 text_handler,
                 doc_handler,
                 gen_cb_handler,
                 act_cb_handler,
             ],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[CommandHandler("cancel", cmd_cancel), setkey_handler],
         per_user=True,
         per_chat=True,
         allow_reentry=True,

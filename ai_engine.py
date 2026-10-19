@@ -26,13 +26,37 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from parser import Node, parse_markdown, tree_to_canonical_markdown
 
 logger = logging.getLogger("mindmap_md_bot.ai_engine")
 
-DEFAULT_AI_API_KEY = ""
+DEFAULT_AI_API_KEY = "cc_ItgqjcOWGe7Gp267hWOSMAi5TBqEvJvhbANaJ8LCqg5dtqci"
+_INVALID_PLACEHOLDER_KEYS = {
+    "",
+    "YOUR_AI_API_KEY_HERE",
+    "AQ.Ab8RN6Ijxd6MDZtSc4gAuQlpeJR8VXhRAt2EF3CTkR5f66Qo4Q",
+}
+
+
+def get_active_api_key(explicit_key: Optional[str] = None) -> str:
+    """واکشی کلید معتبر و نادیده گرفتن کلیدهای پیش‌فرض/منقضی قدیمی در محیط."""
+    candidates = [
+        explicit_key,
+        os.getenv("AI_API_KEY"),
+        os.getenv("GEMINI_API_KEY"),
+        os.getenv("GOOGLE_API_KEY"),
+        os.getenv("OPENAI_API_KEY"),
+        DEFAULT_AI_API_KEY,
+    ]
+    for cand in candidates:
+        if cand:
+            cleaned = cand.strip()
+            if cleaned and cleaned not in _INVALID_PLACEHOLDER_KEYS:
+                return cleaned
+    return ""
 
 # کش کردن سریع‌ترین مسیر پاسخ‌دهنده پس از اولین درخواست موفق
 _WINNING_ROUTE_CACHE: Optional[Tuple[str, str, bool, bool]] = None
@@ -1129,42 +1153,56 @@ def _sync_call_openai_compatible(
     timeout_sec: float = 120.0,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 4096,
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as response:
-            data = json.loads(response.read().decode("utf-8", errors="replace"))
-            msg = data.get("choices", [{}])[0].get("message", {})
-            content = msg.get("content")
-            if not content and "reasoning_content" in msg:
-                content = msg.get("reasoning_content")
-            if content and content.strip():
-                return content.strip()
-            raise RuntimeError(f"پاسخ خالی از سرور مدل ({model_name}) دریافت شد.")
-    except urllib.error.HTTPError as http_err:
-        err_body = ""
+    candidate_models: List[str] = [model_name]
+    if "codecraftapi.com" in base_url or api_key.startswith("cc_"):
+        for fallback_m in ("gemini-3.7-flash", "gemini-3.6-flash", "gpt-5.6-luna", "deepseek-v4-flash-0731"):
+            if fallback_m not in candidate_models:
+                candidate_models.append(fallback_m)
+
+    last_error = ""
+    for current_model in candidate_models:
+        payload = {
+            "model": current_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 4096,
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
+            },
+            method="POST",
+        )
         try:
-            err_body = http_err.read().decode("utf-8", errors="replace")[:250]
-        except Exception:
-            pass
-        raise RuntimeError(f"CodeCraft/OpenAI API HTTP {http_err.code}: {err_body}") from http_err
+            with urllib.request.urlopen(req, timeout=timeout_sec) as response:
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
+                msg = data.get("choices", [{}])[0].get("message", {})
+                content = msg.get("content")
+                if not content and "reasoning_content" in msg:
+                    content = msg.get("reasoning_content")
+                if content and content.strip():
+                    return content.strip()
+                last_error = f"پاسخ خالی از سرور مدل ({current_model}) دریافت شد."
+        except urllib.error.HTTPError as http_err:
+            err_body = ""
+            try:
+                err_body = http_err.read().decode("utf-8", errors="replace")[:250]
+            except Exception:
+                pass
+            last_error = f"CodeCraft/OpenAI API HTTP {http_err.code} ({current_model}): {err_body}"
+            if http_err.code in (401, 402, 403):
+                raise RuntimeError(last_error) from http_err
+        except Exception as exc:
+            last_error = f"خطا در مدل {current_model}: {exc}"
+
+    raise RuntimeError(last_error or "خطا در ارتباط با سرور هوش مصنوعی.")
 
 
 async def generate_medical_mindmap_markdown(
@@ -1179,16 +1217,9 @@ async def generate_medical_mindmap_markdown(
     تولید غیرمسدودکننده (Async) فایل Markdown نقشه ذهنی پزشکی با موتور موازی و اعتبارسنجی درخت خروجی.
     پشتیبانی کامل از CodeCraft API (کلیدهای cc_)، OpenAI-compatible و Google Gemini.
     """
-    active_key = (
-        api_key
-        or os.getenv("AI_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-        or os.getenv("GOOGLE_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or DEFAULT_AI_API_KEY
-    ).strip()
+    active_key = get_active_api_key(api_key)
 
-    if not active_key or active_key in ("YOUR_AI_API_KEY_HERE", "AQ.Ab8RN6Ijxd6MDZtSc4gAuQlpeJR8VXhRAt2EF3CTkR5f66Qo4Q"):
+    if not active_key:
         raise RuntimeError(
             "کلید معتبر هوش مصنوعی (AI_API_KEY) تنظیم نشده است.\n\n"
             "🔑 برای فعال‌سازی:\n"
@@ -1243,15 +1274,17 @@ async def generate_medical_mindmap_markdown(
 
 
 def save_api_key_to_env(new_key: str, env_file_path: Optional[str] = None) -> bool:
-    """ذخیره کلید API جدید در متغیر محیطی فعال و فایل .env"""
+    """ذخیره کلید API جدید در متغیر محیطی فعال، متغیر پیش‌فرض و فایل .env"""
     cleaned_key = new_key.strip()
-    if not cleaned_key:
+    if not cleaned_key or cleaned_key in _INVALID_PLACEHOLDER_KEYS:
         return False
     os.environ["AI_API_KEY"] = cleaned_key
-    global _WINNING_ROUTE_CACHE
+    global DEFAULT_AI_API_KEY, _WINNING_ROUTE_CACHE
+    DEFAULT_AI_API_KEY = cleaned_key
     _WINNING_ROUTE_CACHE = None
 
-    target_env = Path(env_file_path) if env_file_path else (workspace_dir / ".env")
+    base_dir = Path(__file__).resolve().parent
+    target_env = Path(env_file_path) if env_file_path else (base_dir / ".env")
     try:
         lines: List[str] = []
         key_found = False
